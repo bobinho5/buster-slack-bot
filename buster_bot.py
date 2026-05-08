@@ -1,6 +1,6 @@
 """
 Buster - PlayerData AI Assistant
-RAG Architecture v1 - Fixed startup order
+RAG Architecture v2 - Pinecone v5 compatible
 """
 
 import os
@@ -10,8 +10,8 @@ import threading
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# ── HEALTH CHECK SERVER - starts immediately before any other imports ──
-PORT = int(os.environ.get("PORT", 8080))
+# ── HEALTH CHECK SERVER - starts immediately ──────────────────
+PORT = int(os.environ.get("PORT", 10000))
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -25,12 +25,11 @@ def run_health_server():
     server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
     server.serve_forever()
 
-# Start health server immediately so Render sees an open port
 health_thread = threading.Thread(target=run_health_server, daemon=True)
 health_thread.start()
 print(f"Health server started on port {PORT}")
 
-# ── NOW import the heavier dependencies ──
+# ── HEAVY IMPORTS ─────────────────────────────────────────────
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 import gspread
@@ -38,16 +37,18 @@ from google.oauth2.service_account import Credentials
 from pinecone import Pinecone
 import anthropic
 
-# ── CREDENTIALS ──────────────────────────────────────────────
-SLACK_BOT_TOKEN      = os.environ["SLACK_BOT_TOKEN"]
-SLACK_APP_TOKEN      = os.environ["SLACK_APP_TOKEN"]
-PINECONE_API_KEY     = os.environ["PINECONE_API_KEY"]
-PINECONE_INDEX_NAME  = os.environ.get("PINECONE_INDEX_NAME", "buster-knowledge")
-ANTHROPIC_API_KEY    = os.environ["ANTHROPIC_API_KEY"]
-MEMORY_SHEET_ID      = os.environ["MEMORY_SHEET_ID"]
-GOOGLE_CREDS_JSON    = os.environ["GOOGLE_CREDENTIALS_JSON"]
-MAX_HISTORY          = 10
-TOP_K_CHUNKS         = 8
+# ── CREDENTIALS ───────────────────────────────────────────────
+SLACK_BOT_TOKEN     = os.environ["SLACK_BOT_TOKEN"]
+SLACK_APP_TOKEN     = os.environ["SLACK_APP_TOKEN"]
+PINECONE_API_KEY    = os.environ["PINECONE_API_KEY"]
+PINECONE_INDEX_NAME = os.environ.get("PINECONE_INDEX_NAME", "buster-knowledge")
+ANTHROPIC_API_KEY   = os.environ["ANTHROPIC_API_KEY"]
+MEMORY_SHEET_ID     = os.environ["MEMORY_SHEET_ID"]
+GOOGLE_CREDS_JSON   = os.environ["GOOGLE_CREDENTIALS_JSON"]
+MAX_HISTORY         = 10
+TOP_K_CHUNKS        = 8
+NAMESPACE           = "buster-docs"
+EMBEDDING_MODEL     = "multilingual-e5-large"
 # ─────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are Buster, an AI assistant built specifically for PlayerData Account Executives. You communicate via Slack. Plain text only — no Markdown, no headers, no ### or ## or #, no --- dividers, no *** or ** bold, no * bullet points, no - bullet points at the start of lines. Use numbers for lists (1. 2. 3.) or write naturally in sentences. Use blank lines between paragraphs for readability.
@@ -61,7 +62,7 @@ When a question could have different answers depending on the situation, give a 
 
 Keep answers practical and concise. Numbered steps for processes. Plain conversational language throughout. Never ask more than one question at a time."""
 
-# ── GOOGLE SHEETS MEMORY ─────────────────────────────────────
+# ── GOOGLE SHEETS MEMORY ──────────────────────────────────────
 def get_gsheet():
     creds_dict = json.loads(GOOGLE_CREDS_JSON)
     creds = Credentials.from_service_account_info(
@@ -110,26 +111,32 @@ def save_message(user_id, role, message):
     except Exception as e:
         print(f"Error saving message: {e}")
 
-# ── PINECONE RETRIEVAL ────────────────────────────────────────
+# ── PINECONE RETRIEVAL ─────────────────────────────────────────
 def get_relevant_context(query):
     try:
         pc = Pinecone(api_key=PINECONE_API_KEY)
         index = pc.Index(PINECONE_INDEX_NAME)
 
-        results = index.search(
-            namespace="buster-docs",
-            query={
-                "inputs": {"text": query},
-                "top_k": TOP_K_CHUNKS
-            },
-            fields=["text", "source", "section"]
+        # Embed the query using Pinecone inference
+        query_embedding = pc.inference.embed(
+            model=EMBEDDING_MODEL,
+            inputs=[query],
+            parameters={"input_type": "query", "truncate": "END"}
+        )[0]["values"]
+
+        # Query the index
+        results = index.query(
+            namespace=NAMESPACE,
+            vector=query_embedding,
+            top_k=TOP_K_CHUNKS,
+            include_metadata=True
         )
 
         chunks = []
-        for hit in results.get("result", {}).get("hits", []):
-            fields = hit.get("fields", {})
-            text = fields.get("text", "")
-            source = fields.get("source", "Unknown")
+        for match in results.get("matches", []):
+            metadata = match.get("metadata", {})
+            text = metadata.get("text", "")
+            source = metadata.get("source", "Unknown")
             if text:
                 chunks.append(f"[Source: {source}]\n{text}")
 
@@ -142,7 +149,7 @@ def get_relevant_context(query):
         print(f"Error querying Pinecone: {e}")
         return ""
 
-# ── CLAUDE API CALL ───────────────────────────────────────────
+# ── CLAUDE API CALL ────────────────────────────────────────────
 def ask_claude(user_message, conversation_history, relevant_context):
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -169,9 +176,9 @@ def ask_claude(user_message, conversation_history, relevant_context):
 
     except Exception as e:
         print(f"Error calling Claude: {e}")
-        return "Sorry, I ran into an issue processing your question. Please try again in a moment."
+        return "Sorry, I ran into an issue. Please try again in a moment."
 
-# ── SLACK RESPONSE ────────────────────────────────────────────
+# ── SLACK RESPONSE ─────────────────────────────────────────────
 def send_slack_dm(user_id, text):
     try:
         response = requests.post(
@@ -180,11 +187,7 @@ def send_slack_dm(user_id, text):
                 "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
                 "Content-Type": "application/json"
             },
-            json={
-                "channel": user_id,
-                "text": text,
-                "username": "Buster",
-            }
+            json={"channel": user_id, "text": text, "username": "Buster"}
         )
         result = response.json()
         if not result.get("ok"):
@@ -192,7 +195,7 @@ def send_slack_dm(user_id, text):
     except Exception as e:
         print(f"Error sending Slack message: {e}")
 
-# ── SLACK APP ─────────────────────────────────────────────────
+# ── SLACK APP ──────────────────────────────────────────────────
 app = App(token=SLACK_BOT_TOKEN)
 
 @app.event("message")
@@ -213,13 +216,13 @@ def handle_dm(event, say, logger):
     save_message(user_id, "user", text)
     history = get_history(user_id)
     relevant_context = get_relevant_context(text)
-    logger.info(f"Retrieved {len(relevant_context)} chars of context from Pinecone")
+    logger.info(f"Retrieved {len(relevant_context)} chars of context")
 
     response_text = ask_claude(text, history, relevant_context)
     send_slack_dm(user_id, response_text)
     save_message(user_id, "assistant", response_text)
 
 if __name__ == "__main__":
-    print(f"Buster RAG starting - Pinecone index: {PINECONE_INDEX_NAME}")
+    print(f"Buster RAG v2 starting - Pinecone index: {PINECONE_INDEX_NAME}")
     handler = SocketModeHandler(app, SLACK_APP_TOKEN)
     handler.start()
