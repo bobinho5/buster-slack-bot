@@ -1,15 +1,6 @@
 """
 Buster - PlayerData AI Assistant
-RAG Architecture v1
-
-Flow:
-1. AE sends DM to Buster in Slack
-2. Render script receives message via Socket Mode
-3. Fetches conversation history from Google Sheets
-4. Queries Pinecone for relevant knowledge chunks
-5. Calls Claude API directly with context + history + question
-6. Posts response back to AE via Slack API
-7. Saves exchange to Google Sheets memory
+RAG Architecture v1 - Fixed startup order
 """
 
 import os
@@ -18,6 +9,28 @@ import time
 import threading
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
+
+# ── HEALTH CHECK SERVER - starts immediately before any other imports ──
+PORT = int(os.environ.get("PORT", 8080))
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Buster RAG is running!")
+    def log_message(self, format, *args):
+        pass
+
+def run_health_server():
+    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
+    server.serve_forever()
+
+# Start health server immediately so Render sees an open port
+health_thread = threading.Thread(target=run_health_server, daemon=True)
+health_thread.start()
+print(f"Health server started on port {PORT}")
+
+# ── NOW import the heavier dependencies ──
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 import gspread
@@ -33,12 +46,10 @@ PINECONE_INDEX_NAME  = os.environ.get("PINECONE_INDEX_NAME", "buster-knowledge")
 ANTHROPIC_API_KEY    = os.environ["ANTHROPIC_API_KEY"]
 MEMORY_SHEET_ID      = os.environ["MEMORY_SHEET_ID"]
 GOOGLE_CREDS_JSON    = os.environ["GOOGLE_CREDENTIALS_JSON"]
-PORT                 = int(os.environ.get("PORT", 8080))
-MAX_HISTORY          = 10   # messages to pass to Claude
-TOP_K_CHUNKS         = 8    # number of knowledge chunks to retrieve from Pinecone
+MAX_HISTORY          = 10
+TOP_K_CHUNKS         = 8
 # ─────────────────────────────────────────────────────────────
 
-# ── SYSTEM PROMPT ─────────────────────────────────────────────
 SYSTEM_PROMPT = """You are Buster, an AI assistant built specifically for PlayerData Account Executives. You communicate via Slack. Plain text only — no Markdown, no headers, no ### or ## or #, no --- dividers, no *** or ** bold, no * bullet points, no - bullet points at the start of lines. Use numbers for lists (1. 2. 3.) or write naturally in sentences. Use blank lines between paragraphs for readability.
 
 Your job is to help AEs with questions about HubSpot, pricing, Gong, SOPs, internal processes, and PlayerData's physical performance context. You are knowledgeable, direct, and friendly — like a senior colleague who knows the playbook inside out.
@@ -48,14 +59,7 @@ You will be given RELEVANT KNOWLEDGE from PlayerData's internal document library
 HOW TO HANDLE VAGUE QUESTIONS:
 When a question could have different answers depending on the situation, give a concise branched answer that covers the key scenarios in one response. Do not ask follow-up questions and wait for answers — AEs need immediate, usable answers.
 
-For example:
-If someone asks "how do I do an upsell?" — give a branched answer covering all scenarios (more than 12 months, 6-12 months, less than 6 months, annual vs monthly) with the key steps for each.
-If someone asks "what is the price for an Air Unit?" — list pricing for all regions and variants concisely.
-
-EXCEPTION: If a question is genuinely too open-ended to answer without context — for example "can you help me?" — ask one single specific question to narrow it down.
-
 Keep answers practical and concise. Numbered steps for processes. Plain conversational language throughout. Never ask more than one question at a time."""
-# ─────────────────────────────────────────────────────────────
 
 # ── GOOGLE SHEETS MEMORY ─────────────────────────────────────
 def get_gsheet():
@@ -108,12 +112,10 @@ def save_message(user_id, role, message):
 
 # ── PINECONE RETRIEVAL ────────────────────────────────────────
 def get_relevant_context(query):
-    """Query Pinecone for the most relevant knowledge chunks."""
     try:
         pc = Pinecone(api_key=PINECONE_API_KEY)
         index = pc.Index(PINECONE_INDEX_NAME)
 
-        # Use Pinecone's integrated inference for embedding + search
         results = index.search(
             namespace="buster-docs",
             query={
@@ -128,9 +130,8 @@ def get_relevant_context(query):
             fields = hit.get("fields", {})
             text = fields.get("text", "")
             source = fields.get("source", "Unknown")
-            section = fields.get("section", "")
             if text:
-                chunks.append(f"[Source: {source} - {section}]\n{text}")
+                chunks.append(f"[Source: {source}]\n{text}")
 
         if chunks:
             return "RELEVANT KNOWLEDGE FROM PLAYERDATA DOCUMENTS:\n\n" + "\n\n---\n\n".join(chunks)
@@ -143,18 +144,13 @@ def get_relevant_context(query):
 
 # ── CLAUDE API CALL ───────────────────────────────────────────
 def ask_claude(user_message, conversation_history, relevant_context):
-    """Call Claude API directly with RAG context and conversation history."""
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-        # Build the message list
         messages = []
-
-        # Add conversation history (excluding the current message)
         for msg in conversation_history[:-1]:
             messages.append({"role": msg["role"], "content": msg["content"]})
 
-        # Build the current user message with context prepended
         if relevant_context:
             full_user_message = f"{relevant_context}\n\nAE QUESTION:\n{user_message}"
         else:
@@ -177,7 +173,6 @@ def ask_claude(user_message, conversation_history, relevant_context):
 
 # ── SLACK RESPONSE ────────────────────────────────────────────
 def send_slack_dm(user_id, text):
-    """Send a DM directly via Slack API using bot token."""
     try:
         response = requests.post(
             "https://slack.com/api/chat.postMessage",
@@ -202,7 +197,6 @@ app = App(token=SLACK_BOT_TOKEN)
 
 @app.event("message")
 def handle_dm(event, say, logger):
-    # Only respond to direct messages, ignore bot messages
     if event.get("channel_type") != "im":
         return
     if event.get("bot_id"):
@@ -216,42 +210,16 @@ def handle_dm(event, say, logger):
 
     logger.info(f"DM from {user_id}: {text[:80]}")
 
-    # 1. Save the incoming user message to memory
     save_message(user_id, "user", text)
-
-    # 2. Get conversation history
     history = get_history(user_id)
-
-    # 3. Query Pinecone for relevant knowledge
     relevant_context = get_relevant_context(text)
     logger.info(f"Retrieved {len(relevant_context)} chars of context from Pinecone")
 
-    # 4. Call Claude with context + history
     response_text = ask_claude(text, history, relevant_context)
-
-    # 5. Send response to user via Slack
     send_slack_dm(user_id, response_text)
-
-    # 6. Save Buster's response to memory
     save_message(user_id, "assistant", response_text)
 
-# ── HEALTH CHECK SERVER ───────────────────────────────────────
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Buster RAG is running!")
-    def log_message(self, format, *args):
-        pass
-
-def run_health_server():
-    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
-    server.serve_forever()
-
 if __name__ == "__main__":
-    t = threading.Thread(target=run_health_server, daemon=True)
-    t.start()
-    print(f"Buster RAG starting - health server on port {PORT}")
-    print(f"Pinecone index: {PINECONE_INDEX_NAME}")
+    print(f"Buster RAG starting - Pinecone index: {PINECONE_INDEX_NAME}")
     handler = SocketModeHandler(app, SLACK_APP_TOKEN)
     handler.start()
