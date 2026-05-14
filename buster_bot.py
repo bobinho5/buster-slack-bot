@@ -30,14 +30,20 @@ health_thread.start()
 print(f"Health server started on port {PORT}")
 
 # ── HEAVY IMPORTS ─────────────────────────────────────────────
+print("DEBUG: Loading heavy imports...")
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
+print("DEBUG: Slack imports done")
 import gspread
 from google.oauth2.service_account import Credentials
+print("DEBUG: Google imports done")
 from pinecone import Pinecone
+print("DEBUG: Pinecone import done")
 import anthropic
+print("DEBUG: Anthropic import done")
 
 # ── CREDENTIALS ───────────────────────────────────────────────
+print("DEBUG: Loading credentials...")
 SLACK_BOT_TOKEN     = os.environ["SLACK_BOT_TOKEN"]
 SLACK_APP_TOKEN     = os.environ["SLACK_APP_TOKEN"]
 PINECONE_API_KEY    = os.environ["PINECONE_API_KEY"]
@@ -49,6 +55,7 @@ MAX_HISTORY         = 10
 TOP_K_CHUNKS        = 8
 NAMESPACE           = "buster-docs"
 EMBEDDING_MODEL     = "multilingual-e5-large"
+print("DEBUG: Credentials loaded")
 # ─────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are Buster, an AI assistant built specifically for PlayerData Account Executives. You communicate via Slack. Plain text only — no Markdown, no headers, no ### or ## or #, no --- dividers, no *** or ** bold, no * bullet points, no - bullet points at the start of lines. Use numbers for lists (1. 2. 3.) or write naturally in sentences. Use blank lines between paragraphs for readability.
@@ -66,6 +73,7 @@ Keep answers practical and concise. Numbered steps for processes. Plain conversa
 
 # ── GOOGLE SHEETS MEMORY ──────────────────────────────────────
 def get_gsheet():
+    print("DEBUG: Connecting to Google Sheets...")
     creds_dict = json.loads(GOOGLE_CREDS_JSON)
     creds = Credentials.from_service_account_info(
         creds_dict,
@@ -82,6 +90,7 @@ def get_gsheet():
             sheet.insert_row(["timestamp", "user_id", "role", "message"], index=1)
     except Exception:
         sheet.insert_row(["timestamp", "user_id", "role", "message"], index=1)
+    print("DEBUG: Google Sheets connected")
     return sheet
 
 def get_history(user_id):
@@ -116,6 +125,7 @@ def save_message(user_id, role, message):
 # ── PINECONE RETRIEVAL ─────────────────────────────────────────
 def get_relevant_context(query):
     try:
+        print("DEBUG: Querying Pinecone...")
         pc = Pinecone(api_key=PINECONE_API_KEY)
         index = pc.Index(PINECONE_INDEX_NAME)
 
@@ -143,8 +153,10 @@ def get_relevant_context(query):
                 chunks.append(f"[Source: {source}]\n{text}")
 
         if chunks:
+            print(f"DEBUG: Pinecone returned {len(chunks)} chunks")
             return "RELEVANT KNOWLEDGE FROM PLAYERDATA DOCUMENTS:\n\n" + "\n\n---\n\n".join(chunks)
         else:
+            print("DEBUG: Pinecone returned no chunks")
             return ""
 
     except Exception as e:
@@ -154,6 +166,7 @@ def get_relevant_context(query):
 # ── CLAUDE API CALL ────────────────────────────────────────────
 def ask_claude(user_message, conversation_history, relevant_context):
     try:
+        print("DEBUG: Calling Claude API...")
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
         messages = []
@@ -174,6 +187,7 @@ def ask_claude(user_message, conversation_history, relevant_context):
             messages=messages
         )
 
+        print("DEBUG: Claude response received")
         return response.content[0].text
 
     except Exception as e:
@@ -198,7 +212,9 @@ def send_slack_dm(user_id, text):
         print(f"Error sending Slack message: {e}")
 
 # ── SLACK APP ──────────────────────────────────────────────────
+print("DEBUG: Initialising Slack app...")
 app = App(token=SLACK_BOT_TOKEN)
+print("DEBUG: Slack app initialised")
 
 @app.event("message")
 def handle_dm(event, say, logger):
@@ -225,6 +241,9 @@ def handle_dm(event, say, logger):
     save_message(user_id, "assistant", response_text)
 
 if __name__ == "__main__":
+    print("DEBUG: Entering main block...")
     print(f"Buster RAG v2 starting - Pinecone index: {PINECONE_INDEX_NAME}")
+    print("DEBUG: Connecting to Slack Socket Mode...")
     handler = SocketModeHandler(app, SLACK_APP_TOKEN)
+    print("DEBUG: Socket Mode handler created, starting...")
     handler.start()
