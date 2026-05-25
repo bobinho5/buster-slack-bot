@@ -73,7 +73,9 @@ For territory questions, only answer based on the Sales Territories document. Ne
 
 For process and SOP questions (upsells, trials, pricing), if you do not have complete step-by-step information in the provided knowledge, say so clearly and direct the AE to the relevant document or manager rather than filling in gaps.
 
-Keep answers practical and concise. Numbered steps for processes. Plain conversational language throughout. Never ask more than one question at a time."""
+Keep answers practical and concise. Numbered steps for processes. Plain conversational language throughout. Never ask more than one question at a time.
+
+For upsell questions where 6 months or fewer remain, the answer is always to use the EXISTING Future Renewal deal in HubSpot. Never instruct the AE to create a new  deal in this scenario, even if asked to repeat or summarize the process from scratch."""
 
 # ── GOOGLE SHEETS MEMORY ──────────────────────────────────────
 def get_gsheet():
