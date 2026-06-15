@@ -228,6 +228,7 @@ def upsert_chunks(index, chunks, source_name):
     if not chunks:
         return
 
+    import unicodedata
     batch_size = 50
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i:i + batch_size]
@@ -238,7 +239,9 @@ def upsert_chunks(index, chunks, source_name):
 
         vectors = []
         for j, (chunk, embedding) in enumerate(zip(batch, embeddings)):
-            record_id = f"{source_name.replace(' ', '_').replace('/', '_')[:50]}_chunk_{chunk['chunk_index']}"
+            clean_name = unicodedata.normalize('NFKD', source_name).encode('ascii', 'ignore').decode('ascii')
+            clean_name = clean_name.replace(' ', '_').replace('/', '_').replace('&', 'and').replace('—', '-').replace('–', '-')
+            record_id = f"{clean_name[:50]}_chunk_{chunk['chunk_index']}"
             vectors.append({
                 "id": record_id,
                 "values": embedding,
