@@ -225,7 +225,7 @@ def send_slack_dm(user_id, text):
 
 # ── SLACK APP ──────────────────────────────────────────────────
 print("DEBUG: Initialising Slack app...")
-app = App(token=SLACK_BOT_TOKEN)
+app = App(token=SLACK_BOT_TOKEN, signing_secret=None)
 print("DEBUG: Slack app initialised")
 
 @app.event("message")
