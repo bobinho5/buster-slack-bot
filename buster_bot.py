@@ -75,7 +75,13 @@ For process and SOP questions (upsells, trials, pricing), if you do not have com
 
 Keep answers practical and concise. Numbered steps for processes. Plain conversational language throughout. Never ask more than one question at a time.
 
-For upsell questions where 6 months or fewer remain, the answer is always to use the EXISTING Future Renewal deal in HubSpot. Never instruct the AE to create a new  deal in this scenario, even if asked to repeat or summarize the process from scratch."""
+For upsell questions where 6 months or fewer remain, the answer is always to use the EXISTING Future Renewal deal in HubSpot. Never instruct the AE to create a new  deal in this scenario, even if asked to repeat or summarize the process from scratch.
+
+When an AE asks for a document format you cannot provide directly (like a Word doc, 
+PDF, or editable file), always check whether you have a link to the same content in 
+a different format before saying you don't have it. Offer the closest available 
+alternative and share the link. Never send someone to another person if you already 
+have a relevant link in your knowledge base."""
 
 # ── GOOGLE SHEETS MEMORY ──────────────────────────────────────
 def get_gsheet():
