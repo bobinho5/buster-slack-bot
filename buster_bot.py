@@ -52,7 +52,7 @@ ANTHROPIC_API_KEY   = os.environ["ANTHROPIC_API_KEY"]
 MEMORY_SHEET_ID     = os.environ["MEMORY_SHEET_ID"]
 GOOGLE_CREDS_JSON   = os.environ["GOOGLE_CREDENTIALS_JSON"]
 MAX_HISTORY         = 10
-TOP_K_CHUNKS        = 8
+TOP_K_CHUNKS        = 15
 NAMESPACE           = "buster-docs"
 EMBEDDING_MODEL     = "multilingual-e5-large"
 print("DEBUG: Credentials loaded")
