@@ -328,8 +328,9 @@ def set_last_indexed_time(index, source_name, modified_time):
             "id": manifest_id,
             # Manifest records are never used for similarity search - they
             # live in their own namespace purely as a key/value lookup - so
-            # a placeholder vector is fine here.
-            "values": [0.0] * EMBEDDING_DIMENSION,
+            # the exact values don't matter, but Pinecone rejects an
+            # all-zero dense vector outright, so the first element is 1.0.
+            "values": [1.0] + [0.0] * (EMBEDDING_DIMENSION - 1),
             "metadata": {
                 "source": source_name,
                 "modified_time": modified_time
